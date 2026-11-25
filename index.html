@@ -1,0 +1,407 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Field tracker</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Figtree:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+  :root {
+    --bg: #EDF1F4;
+    --panel: #FFFFFF;
+    --ink: #12263A;
+    --muted: #5B6B7B;
+    --line: #D5DDE4;
+    --accent: #0F7B8A;
+    --ok: #1E9E5A;
+    --bad: #C0392B;
+    --warn: #B97500;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0F1923;
+      --panel: #16232F;
+      --ink: #E6EEF4;
+      --muted: #93A4B3;
+      --line: #263644;
+      --accent: #4FC3D4;
+      --ok: #45C583;
+      --bad: #FF7A6B;
+      --warn: #F0B04A;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font-family: "Figtree", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    font-size: 16px;
+    line-height: 1.45;
+  }
+  .layout {
+    display: grid;
+    grid-template-columns: 1fr;
+    grid-template-rows: 46vh auto;
+    min-height: 100%;
+  }
+  @media (min-width: 900px) {
+    .layout {
+      grid-template-columns: 1fr 400px;
+      grid-template-rows: 100vh;
+      height: 100vh;
+    }
+    .panel { overflow-y: auto; }
+  }
+
+  /* Map */
+  .map-wrap { position: relative; min-height: 260px; }
+  #map { position: absolute; inset: 0; background: var(--line); }
+  .recenter {
+    position: absolute; right: 12px; bottom: 22px; z-index: 500;
+    font: inherit; font-weight: 600; font-size: 14px;
+    padding: 10px 14px; border-radius: 8px; cursor: pointer;
+    background: var(--panel); color: var(--ink);
+    border: 1px solid var(--line);
+    box-shadow: 0 1px 4px rgba(0,0,0,.18);
+  }
+  .recenter:focus-visible, .link:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+  .no-fix {
+    position: absolute; left: 12px; top: 12px; right: 64px; z-index: 500;
+    padding: 10px 12px; border-radius: 8px; font-size: 14px; font-weight: 500;
+    background: var(--panel); color: var(--ink); border: 1px solid var(--line);
+    box-shadow: 0 1px 4px rgba(0,0,0,.18);
+  }
+  .no-fix[hidden] { display: none; }
+
+  /* Panel */
+  .panel {
+    background: var(--panel);
+    border-left: 1px solid var(--line);
+    padding: 20px 20px 32px;
+    display: flex; flex-direction: column; gap: 24px;
+  }
+  .head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  h1 { font-size: 20px; line-height: 1.2; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
+  h2 { font-size: 15px; margin: 0 0 10px; font-weight: 600; color: var(--muted); }
+  .status {
+    display: inline-flex; align-items: center; gap: 8px;
+    font-size: 14px; font-weight: 600; padding: 6px 12px;
+    border-radius: 999px; border: 1px solid var(--line);
+  }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); }
+  .status.online .dot { background: var(--ok); box-shadow: 0 0 0 4px color-mix(in srgb, var(--ok) 25%, transparent); }
+  .status.offline .dot { background: var(--bad); }
+  .status.waiting .dot { background: var(--warn); }
+
+  /* Temperature */
+  .temp-value { display: flex; align-items: baseline; gap: 6px; }
+  #temp {
+    font-size: 76px; line-height: 1; font-weight: 700;
+    letter-spacing: -0.04em; font-variant-numeric: tabular-nums;
+  }
+  .unit { font-size: 28px; font-weight: 500; color: var(--muted); }
+  .scale { position: relative; height: 12px; margin-top: 18px; }
+  .scale-track {
+    position: absolute; inset: 0; border-radius: 6px;
+    background: linear-gradient(90deg, #2B7BE4 0%, #0F9D8A 40%, #E3A21A 62%, #D33F2F 100%);
+    opacity: .9;
+  }
+  #scale-marker {
+    position: absolute; top: -5px; width: 4px; height: 22px; border-radius: 2px;
+    background: var(--ink); border: 2px solid var(--panel);
+    left: 0; transform: translateX(-50%); transition: left .5s ease;
+    visibility: hidden;
+  }
+  .scale-labels {
+    display: flex; justify-content: space-between;
+    font-size: 13px; color: var(--muted); margin-top: 8px;
+    font-variant-numeric: tabular-nums;
+  }
+  .temp-note { margin: 10px 0 0; font-size: 14px; color: var(--bad); font-weight: 500; }
+
+  /* Facts */
+  dl.facts { margin: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 0; border-top: 1px solid var(--line); }
+  .fact { padding: 12px 0; border-bottom: 1px solid var(--line); }
+  .fact.wide { grid-column: 1 / -1; }
+  .fact dt { font-size: 13px; color: var(--muted); margin: 0 0 2px; }
+  .fact dd { margin: 0; font-size: 17px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .link { color: var(--accent); font-weight: 600; font-size: 14px; text-decoration: none; }
+  .link:hover { text-decoration: underline; }
+
+  /* Chart */
+  #chart svg { width: 100%; height: auto; display: block; }
+  #chart .grid { stroke: var(--line); stroke-width: 1; }
+  #chart .axis { fill: var(--muted); font-size: 11px; font-family: inherit; }
+  #chart .line { fill: none; stroke: var(--accent); stroke-width: 2.5; stroke-linejoin: round; stroke-linecap: round; }
+  #chart .last { fill: var(--accent); stroke: var(--panel); stroke-width: 2; }
+  .empty { margin: 0; font-size: 14px; color: var(--muted); }
+</style>
+</head>
+<body>
+<main class="layout">
+  <section class="map-wrap" aria-label="Device location">
+    <div id="map"></div>
+    <div id="nofix" class="no-fix" hidden></div>
+    <button id="recenter" class="recenter" type="button">Recenter</button>
+  </section>
+
+  <aside class="panel">
+    <div class="head">
+      <h1>Field tracker</h1>
+      <span id="status" class="status waiting" role="status"><span class="dot"></span><span id="status-text">Waiting for device</span></span>
+    </div>
+
+    <section aria-label="Temperature">
+      <div class="temp-value"><span id="temp">--</span><span class="unit">°C</span></div>
+      <div class="scale">
+        <div class="scale-track"></div>
+        <div id="scale-marker"></div>
+      </div>
+      <div class="scale-labels"><span>−10°</span><span>10°</span><span>30°</span><span>60°</span></div>
+      <p id="temp-note" class="temp-note" hidden>The temperature sensor isn’t responding. Check its wiring.</p>
+    </section>
+
+    <dl class="facts">
+      <div class="fact"><dt>GPS</dt><dd id="f-gps">--</dd></div>
+      <div class="fact"><dt>Satellites</dt><dd id="f-sats">--</dd></div>
+      <div class="fact"><dt>Altitude</dt><dd id="f-alt">--</dd></div>
+      <div class="fact"><dt>Speed</dt><dd id="f-speed">--</dd></div>
+      <div class="fact wide"><dt>Position</dt><dd id="f-pos">--</dd><a id="f-link" class="link" href="#" target="_blank" rel="noopener" hidden>Open in Google Maps</a></div>
+      <div class="fact wide"><dt>Last update</dt><dd id="f-age">--</dd></div>
+    </dl>
+
+    <section aria-label="Temperature history">
+      <h2>Temperature history</h2>
+      <div id="chart"><p class="empty">The chart appears after two readings.</p></div>
+    </section>
+  </aside>
+</main>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+(function () {
+  var $ = function (id) { return document.getElementById(id); };
+  var MIN_T = -10, MAX_T = 60;
+  var ONLINE_WITHIN_MS = 45000;
+
+  var map, marker, trail;
+  var follow = true;
+  var history = [];
+  var latest = null;          // newest reading from the server
+  var ageBase = 0;            // ms age of latest at the time it was fetched
+  var fetchedAt = 0;          // local time of that fetch
+  var lastPlaced = null;      // last [lat, lng] shown on the map
+
+  /* ---------- Map ---------- */
+  function initMap() {
+    map = L.map('map').setView([22.5, 80], 4);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19,
+      attribution: '© OpenStreetMap contributors'
+    }).addTo(map);
+    trail = L.polyline([], { color: '#0F7B8A', weight: 4, opacity: 0.85 }).addTo(map);
+    map.on('dragstart', function () { follow = false; });
+    $('recenter').addEventListener('click', function () {
+      follow = true;
+      if (lastPlaced) map.setView(lastPlaced, Math.max(map.getZoom(), 15));
+    });
+  }
+
+  function placeMarker(lat, lng, fresh) {
+    var first = !lastPlaced;
+    lastPlaced = [lat, lng];
+    if (!marker) {
+      marker = L.circleMarker(lastPlaced, {
+        radius: 9, weight: 3, color: '#FFFFFF', fillColor: '#0F7B8A', fillOpacity: 1
+      }).addTo(map);
+    } else {
+      marker.setLatLng(lastPlaced);
+    }
+    marker.setStyle({ fillColor: fresh ? '#0F7B8A' : '#8A97A3' });
+    if (first) map.setView(lastPlaced, 16);
+    else if (follow) map.panTo(lastPlaced);
+  }
+
+  /* ---------- Formatting ---------- */
+  function tempColor(t) {
+    if (t < 15) return '#2B7BE4';
+    if (t < 30) return '#0F9D8A';
+    if (t < 40) return '#E08A00';
+    return '#D33F2F';
+  }
+  function fmtAge(ms) {
+    var s = Math.max(0, Math.round(ms / 1000));
+    if (s < 60) return s + ' s ago';
+    var m = Math.floor(s / 60);
+    if (m < 60) return m + ' min ago';
+    var h = Math.floor(m / 60);
+    return h + ' h ' + (m % 60) + ' min ago';
+  }
+  function fmtTime(ms) {
+    return new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  }
+
+  /* ---------- Render ---------- */
+  function lastKnownPosition() {
+    for (var i = history.length - 1; i >= 0; i--) {
+      var r = history[i];
+      if (r.latitude !== null && r.longitude !== null) return r;
+    }
+    return null;
+  }
+
+  function renderLatest() {
+    if (!latest) return;
+    var r = latest;
+
+    // Temperature
+    var tempEl = $('temp');
+    if (r.temperature === null) {
+      tempEl.textContent = '--';
+      tempEl.style.color = '';
+      $('scale-marker').style.visibility = 'hidden';
+      $('temp-note').hidden = false;
+    } else {
+      tempEl.textContent = r.temperature.toFixed(1);
+      tempEl.style.color = tempColor(r.temperature);
+      var pct = (r.temperature - MIN_T) / (MAX_T - MIN_T) * 100;
+      pct = Math.min(100, Math.max(0, pct));
+      var m = $('scale-marker');
+      m.style.left = pct + '%';
+      m.style.visibility = 'visible';
+      $('temp-note').hidden = true;
+    }
+
+    // GPS facts
+    $('f-gps').textContent = r.gps_fix ? 'Fix acquired' : 'Searching';
+    $('f-sats').textContent = String(r.satellites);
+    $('f-alt').textContent = r.gps_fix && r.altitude !== null ? r.altitude.toFixed(0) + ' m' : '--';
+    $('f-speed').textContent = r.gps_fix && r.speed_kmph !== null ? r.speed_kmph.toFixed(1) + ' km/h' : '--';
+
+    // Position (live fix, or last known)
+    var pos = r.gps_fix ? r : lastKnownPosition();
+    var nofix = $('nofix');
+    if (pos) {
+      var lat = pos.latitude, lng = pos.longitude;
+      $('f-pos').textContent = lat.toFixed(5) + ', ' + lng.toFixed(5);
+      var link = $('f-link');
+      link.href = 'https://www.google.com/maps?q=' + lat + ',' + lng;
+      link.hidden = false;
+      placeMarker(lat, lng, r.gps_fix);
+      if (r.gps_fix) {
+        nofix.hidden = true;
+      } else {
+        nofix.textContent = 'No GPS fix right now. Showing the last known position. Move the antenna outdoors or near a window.';
+        nofix.hidden = false;
+      }
+    } else {
+      $('f-pos').textContent = '--';
+      $('f-link').hidden = true;
+      nofix.textContent = 'Waiting for a GPS fix. This can take a few minutes with a clear view of the sky.';
+      nofix.hidden = false;
+    }
+    tickAge();
+  }
+
+  function tickAge() {
+    var status = $('status'), text = $('status-text');
+    if (!latest) {
+      status.className = 'status waiting';
+      text.textContent = 'Waiting for device';
+      $('f-age').textContent = '--';
+      return;
+    }
+    var age = ageBase + (Date.now() - fetchedAt);
+    $('f-age').textContent = fmtAge(age);
+    if (age <= ONLINE_WITHIN_MS) {
+      status.className = 'status online';
+      text.textContent = 'Device online';
+    } else {
+      status.className = 'status offline';
+      text.textContent = 'Device offline';
+    }
+  }
+
+  function drawTrail() {
+    var pts = [];
+    for (var i = 0; i < history.length; i++) {
+      var r = history[i];
+      if (r.gps_fix && r.latitude !== null && r.longitude !== null) pts.push([r.latitude, r.longitude]);
+    }
+    trail.setLatLngs(pts);
+  }
+
+  function drawChart() {
+    var el = $('chart');
+    var pts = history.filter(function (r) { return r.temperature !== null; });
+    if (pts.length < 2) {
+      el.innerHTML = '<p class="empty">The chart appears after two readings.</p>';
+      return;
+    }
+    var W = 600, H = 220, pl = 40, pr = 12, pt = 12, pb = 26;
+    var t0 = pts[0].received_at, t1 = pts[pts.length - 1].received_at;
+    var temps = pts.map(function (p) { return p.temperature; });
+    var lo = Math.min.apply(null, temps), hi = Math.max.apply(null, temps);
+    if (hi - lo < 4) { var mid = (hi + lo) / 2; lo = mid - 2; hi = mid + 2; }
+    var pad = (hi - lo) * 0.1; lo -= pad; hi += pad;
+    function x(t) { return pl + (t - t0) / Math.max(1, t1 - t0) * (W - pl - pr); }
+    function y(v) { return pt + (hi - v) / (hi - lo) * (H - pt - pb); }
+
+    var svg = '<svg viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="Temperature over time">';
+    for (var i = 0; i < 4; i++) {
+      var v = lo + i * (hi - lo) / 3;
+      svg += '<line class="grid" x1="' + pl + '" x2="' + (W - pr) + '" y1="' + y(v).toFixed(1) + '" y2="' + y(v).toFixed(1) + '"/>';
+      svg += '<text class="axis" x="' + (pl - 6) + '" y="' + (y(v) + 4).toFixed(1) + '" text-anchor="end">' + v.toFixed(1) + '</text>';
+    }
+    var d = pts.map(function (p, i) {
+      return (i ? 'L' : 'M') + x(p.received_at).toFixed(1) + ' ' + y(p.temperature).toFixed(1);
+    }).join(' ');
+    svg += '<path class="line" d="' + d + '"/>';
+    var last = pts[pts.length - 1];
+    svg += '<circle class="last" cx="' + x(last.received_at).toFixed(1) + '" cy="' + y(last.temperature).toFixed(1) + '" r="5"/>';
+    svg += '<text class="axis" x="' + pl + '" y="' + (H - 6) + '">' + fmtTime(t0) + '</text>';
+    svg += '<text class="axis" x="' + (W - pr) + '" y="' + (H - 6) + '" text-anchor="end">' + fmtTime(t1) + '</text>';
+    svg += '</svg>';
+    el.innerHTML = svg;
+  }
+
+  /* ---------- Data ---------- */
+  function loadLatest() {
+    return fetch('/api/latest', { cache: 'no-store' })
+      .then(function (res) { return res.json(); })
+      .then(function (data) {
+        fetchedAt = Date.now();
+        if (data.reading) {
+          latest = data.reading;
+          ageBase = data.server_time - data.reading.received_at;
+        }
+        renderLatest();
+      })
+      .catch(function () { /* keep showing the last data; try again on the next tick */ });
+  }
+
+  function loadHistory() {
+    return fetch('/api/history?limit=300', { cache: 'no-store' })
+      .then(function (res) { return res.json(); })
+      .then(function (rows) {
+        history = Array.isArray(rows) ? rows : [];
+        drawTrail();
+        drawChart();
+        renderLatest();
+      })
+      .catch(function () {});
+  }
+
+  initMap();
+  loadHistory().then(loadLatest);
+  setInterval(loadLatest, 5000);
+  setInterval(loadHistory, 15000);
+  setInterval(tickAge, 1000);
+})();
+</script>
+</body>
+</html>
